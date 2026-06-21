@@ -1,4 +1,4 @@
-import { withSupabase } from "@supabase/server";
+import { withSupabase } from "npm:@supabase/server@^1.1.0";
 
 /**
  * POST /functions/v1/submit-run

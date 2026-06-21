@@ -1,4 +1,4 @@
-import { withSupabase } from "@supabase/server";
+import { withSupabase } from "npm:@supabase/server@^1.1.0";
 
 /**
  * GET /functions/v1/leaderboard?limit=50&character=ranger

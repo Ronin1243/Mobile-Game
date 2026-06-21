@@ -27,7 +27,7 @@ export class BootScene extends Phaser.Scene {
 
     this.makeGem(TEX_GEM, GEM.radius, COLORS.gem);
 
-    this.scene.start('Game');
+    this.scene.start('Home');
   }
 
   /** Draw a filled circle (optionally with a bright ring) into a texture. */

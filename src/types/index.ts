@@ -42,10 +42,39 @@ export interface UpgradeChoice {
   description: string;
 }
 
+// --- Meta-progression types -------------------------------------------
+
+export type SkillId =
+  | 'vitality'
+  | 'power'
+  | 'swiftness'
+  | 'magnetism'
+  | 'greed'
+  | 'headStart'
+  | 'secondWind';
+
+export type CharacterId = 'ranger' | 'bruiser' | 'phantom';
+
+/**
+ * Everything the GameScene needs from the meta layer to initialise a run.
+ * Produced by MetaBonusResolver from the current SaveData.
+ */
+export interface RunConfig {
+  baseStats: PlayerStats;
+  startingWeapon: Weapon;
+  /** In-run level the player spawns at (1 = default, Head Start adds levels). */
+  startLevel: number;
+  /** Fraction of maxHp restored on second wind; null if skill not owned. */
+  secondWindReviveFrac: number | null;
+  /** Coin earnings multiplier (1.0 = no bonus). */
+  greedMult: number;
+}
+
 /** Snapshot of a finished run, handed to the Game Over screen. */
 export interface RunResult {
   survivedMs: number;
   kills: number;
   level: number;
   score: number;
+  coinsEarned: number;
 }

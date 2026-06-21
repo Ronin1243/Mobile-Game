@@ -5,6 +5,7 @@ import {
   GEM,
   PROJECTILE,
   WORLD,
+  computeCoins,
   computeScore,
   xpForLevel
 } from '../config/GameConfig';
@@ -17,7 +18,8 @@ import { Spawner } from '../systems/Spawner';
 import { WeaponSystem } from '../systems/WeaponSystem';
 import { UpgradeSystem } from '../systems/UpgradeSystem';
 import { VirtualJoystick } from '../ui/VirtualJoystick';
-import type { RunResult, UpgradeKind } from '../types';
+import { saveService } from '../save/SaveService';
+import type { RunConfig, RunResult, UpgradeKind } from '../types';
 
 /** Payload broadcast to the HUD scene each frame. */
 export interface HudState {
@@ -39,10 +41,9 @@ export class GameScene extends Phaser.Scene {
   private weapons!: WeaponSystem;
   private joystick!: VirtualJoystick;
 
-  /** Live player position shared with enemies, gems and the spawner. */
   private readonly playerPos = new Phaser.Math.Vector2();
 
-  // --- run state ---
+  // Run state
   private elapsedMs = 0;
   private kills = 0;
   private level = 1;
@@ -50,9 +51,14 @@ export class GameScene extends Phaser.Scene {
   private xpToNext = xpForLevel(1);
   private levelingUp = false;
   private gameOver = false;
+  private runConfig: RunConfig | null = null;
 
   constructor() {
     super('Game');
+  }
+
+  init(data: { runConfig?: RunConfig }): void {
+    this.runConfig = data?.runConfig ?? null;
   }
 
   create(): void {
@@ -64,8 +70,12 @@ export class GameScene extends Phaser.Scene {
 
     this.drawGrid();
 
-    // --- entities & pools ---
-    this.player = new Player(this, WORLD.width / 2, WORLD.height / 2);
+    this.player = new Player(
+      this,
+      WORLD.width / 2,
+      WORLD.height / 2,
+      this.runConfig ?? undefined
+    );
     this.playerPos.set(this.player.x, this.player.y);
 
     this.enemies = new Pool(this, Enemy, ENEMY_POOL_MAX);
@@ -77,25 +87,22 @@ export class GameScene extends Phaser.Scene {
     this.joystick = new VirtualJoystick(this);
 
     this.cameras.main.startFollow(this.player, true, 0.12, 0.12);
-
     this.setupCollisions();
 
-    // (Re)launch the HUD overlay fresh.
     if (this.scene.isActive('HUD')) this.scene.stop('HUD');
     this.scene.launch('HUD');
 
-    // When this scene resumes after a level-up, check for chained level-ups.
-    // Re-bind cleanly so retries don't stack duplicate listeners.
     this.events.off(Phaser.Scenes.Events.RESUME, this.onResume, this);
     this.events.on(Phaser.Scenes.Events.RESUME, this.onResume, this);
   }
 
   private resetRunState(): void {
+    const startLevel = this.runConfig?.startLevel ?? 1;
     this.elapsedMs = 0;
     this.kills = 0;
-    this.level = 1;
+    this.level = startLevel;
     this.xp = 0;
-    this.xpToNext = xpForLevel(1);
+    this.xpToNext = xpForLevel(startLevel);
     this.levelingUp = false;
     this.gameOver = false;
   }
@@ -141,7 +148,7 @@ export class GameScene extends Phaser.Scene {
 
   private dropGem(x: number, y: number, xp: number): void {
     const gem = this.gems.obtain();
-    if (!gem) return; // pool exhausted — skip the drop
+    if (!gem) return;
     gem.spawn(
       x,
       y,
@@ -165,7 +172,6 @@ export class GameScene extends Phaser.Scene {
 
   private checkLevelUp(): void {
     if (this.xp < this.xpToNext) return;
-
     this.xp -= this.xpToNext;
     this.level++;
     this.xpToNext = xpForLevel(this.level);
@@ -176,14 +182,12 @@ export class GameScene extends Phaser.Scene {
     this.scene.launch('LevelUp', { choices });
   }
 
-  /** Called by the LevelUp scene when the player picks an upgrade. */
   onUpgradeChosen(kind: UpgradeKind): void {
     UpgradeSystem.apply(this.player, kind);
     this.levelingUp = false;
   }
 
   private onResume(): void {
-    // A single gem may have granted enough XP for multiple levels.
     if (!this.levelingUp) this.checkLevelUp();
   }
 
@@ -192,11 +196,16 @@ export class GameScene extends Phaser.Scene {
     this.gameOver = true;
     this.player.setVelocity(0, 0);
 
+    const greedMult = this.runConfig?.greedMult ?? 1;
+    const coinsEarned = computeCoins(this.elapsedMs, this.kills, this.level, greedMult);
+    saveService.addCoins(coinsEarned);
+
     const result: RunResult = {
       survivedMs: this.elapsedMs,
       kills: this.kills,
       level: this.level,
-      score: computeScore(this.elapsedMs, this.kills, this.level)
+      score: computeScore(this.elapsedMs, this.kills, this.level),
+      coinsEarned
     };
 
     this.scene.stop('HUD');
@@ -208,14 +217,10 @@ export class GameScene extends Phaser.Scene {
     if (this.gameOver || this.levelingUp) return;
 
     this.elapsedMs += delta;
-
-    // Movement from the joystick.
     this.player.move(this.joystick.vector.x, this.joystick.vector.y);
     this.playerPos.set(this.player.x, this.player.y);
-
     this.weapons.update(delta);
     this.spawner.update(delta, this.elapsedMs);
-
     this.broadcastHud();
   }
 
@@ -236,15 +241,10 @@ export class GameScene extends Phaser.Scene {
     const g = this.add.graphics();
     g.lineStyle(2, COLORS.grid, 1);
     const step = 120;
-    for (let x = 0; x <= WORLD.width; x += step) {
-      g.lineBetween(x, 0, x, WORLD.height);
-    }
-    for (let y = 0; y <= WORLD.height; y += step) {
-      g.lineBetween(0, y, WORLD.width, y);
-    }
+    for (let x = 0; x <= WORLD.width; x += step) g.lineBetween(x, 0, x, WORLD.height);
+    for (let y = 0; y <= WORLD.height; y += step) g.lineBetween(0, y, WORLD.width, y);
     g.setDepth(-1);
 
-    // Subtle arena border.
     const border = this.add.graphics();
     border.lineStyle(6, COLORS.player, 0.25);
     border.strokeRect(0, 0, WORLD.width, WORLD.height);

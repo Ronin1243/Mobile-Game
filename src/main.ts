@@ -1,10 +1,13 @@
 import Phaser from 'phaser';
 import { COLORS, VIEW } from './config/GameConfig';
 import { BootScene } from './scenes/BootScene';
+import { HomeScene } from './scenes/HomeScene';
 import { GameScene } from './scenes/GameScene';
 import { HUDScene } from './scenes/HUDScene';
 import { LevelUpScene } from './scenes/LevelUpScene';
 import { GameOverScene } from './scenes/GameOverScene';
+import { SkillTreeScene } from './scenes/SkillTreeScene';
+import { CharactersScene } from './scenes/CharactersScene';
 
 const config: Phaser.Types.Core.GameConfig = {
   type: Phaser.AUTO,
@@ -27,7 +30,16 @@ const config: Phaser.Types.Core.GameConfig = {
       gravity: { x: 0, y: 0 }
     }
   },
-  scene: [BootScene, GameScene, HUDScene, LevelUpScene, GameOverScene]
+  scene: [
+    BootScene,
+    HomeScene,
+    GameScene,
+    HUDScene,
+    LevelUpScene,
+    GameOverScene,
+    SkillTreeScene,
+    CharactersScene
+  ]
 };
 
 // eslint-disable-next-line no-new

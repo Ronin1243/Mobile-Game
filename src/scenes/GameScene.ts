@@ -1,0 +1,253 @@
+import Phaser from 'phaser';
+import {
+  COLORS,
+  ENEMY_POOL_MAX,
+  GEM,
+  PROJECTILE,
+  WORLD,
+  computeScore,
+  xpForLevel
+} from '../config/GameConfig';
+import { Player } from '../entities/Player';
+import { Enemy } from '../entities/Enemy';
+import { Projectile } from '../entities/Projectile';
+import { Gem } from '../entities/Gem';
+import { Pool } from '../systems/Pool';
+import { Spawner } from '../systems/Spawner';
+import { WeaponSystem } from '../systems/WeaponSystem';
+import { UpgradeSystem } from '../systems/UpgradeSystem';
+import { VirtualJoystick } from '../ui/VirtualJoystick';
+import type { RunResult, UpgradeKind } from '../types';
+
+/** Payload broadcast to the HUD scene each frame. */
+export interface HudState {
+  timeMs: number;
+  level: number;
+  xp: number;
+  xpToNext: number;
+  hp: number;
+  maxHp: number;
+  kills: number;
+}
+
+export class GameScene extends Phaser.Scene {
+  private player!: Player;
+  private enemies!: Pool<Enemy>;
+  private projectiles!: Pool<Projectile>;
+  private gems!: Pool<Gem>;
+  private spawner!: Spawner;
+  private weapons!: WeaponSystem;
+  private joystick!: VirtualJoystick;
+
+  /** Live player position shared with enemies, gems and the spawner. */
+  private readonly playerPos = new Phaser.Math.Vector2();
+
+  // --- run state ---
+  private elapsedMs = 0;
+  private kills = 0;
+  private level = 1;
+  private xp = 0;
+  private xpToNext = xpForLevel(1);
+  private levelingUp = false;
+  private gameOver = false;
+
+  constructor() {
+    super('Game');
+  }
+
+  create(): void {
+    this.resetRunState();
+
+    this.physics.world.setBounds(0, 0, WORLD.width, WORLD.height);
+    this.cameras.main.setBounds(0, 0, WORLD.width, WORLD.height);
+    this.cameras.main.setBackgroundColor(COLORS.background);
+
+    this.drawGrid();
+
+    // --- entities & pools ---
+    this.player = new Player(this, WORLD.width / 2, WORLD.height / 2);
+    this.playerPos.set(this.player.x, this.player.y);
+
+    this.enemies = new Pool(this, Enemy, ENEMY_POOL_MAX);
+    this.projectiles = new Pool(this, Projectile, PROJECTILE.poolMax);
+    this.gems = new Pool(this, Gem, GEM.poolMax);
+
+    this.spawner = new Spawner(this.enemies, this.playerPos);
+    this.weapons = new WeaponSystem(this.player, this.enemies, this.projectiles);
+    this.joystick = new VirtualJoystick(this);
+
+    this.cameras.main.startFollow(this.player, true, 0.12, 0.12);
+
+    this.setupCollisions();
+
+    // (Re)launch the HUD overlay fresh.
+    if (this.scene.isActive('HUD')) this.scene.stop('HUD');
+    this.scene.launch('HUD');
+
+    // When this scene resumes after a level-up, check for chained level-ups.
+    // Re-bind cleanly so retries don't stack duplicate listeners.
+    this.events.off(Phaser.Scenes.Events.RESUME, this.onResume, this);
+    this.events.on(Phaser.Scenes.Events.RESUME, this.onResume, this);
+  }
+
+  private resetRunState(): void {
+    this.elapsedMs = 0;
+    this.kills = 0;
+    this.level = 1;
+    this.xp = 0;
+    this.xpToNext = xpForLevel(1);
+    this.levelingUp = false;
+    this.gameOver = false;
+  }
+
+  private setupCollisions(): void {
+    this.physics.add.overlap(
+      this.projectiles.group,
+      this.enemies.group,
+      this.onProjectileHitEnemy as Phaser.Types.Physics.Arcade.ArcadePhysicsCallback,
+      undefined,
+      this
+    );
+    this.physics.add.overlap(
+      this.player,
+      this.enemies.group,
+      this.onPlayerHitEnemy as Phaser.Types.Physics.Arcade.ArcadePhysicsCallback,
+      undefined,
+      this
+    );
+  }
+
+  private onProjectileHitEnemy = (obj1: unknown, obj2: unknown): void => {
+    const proj = obj1 as Projectile;
+    const enemy = obj2 as Enemy;
+    if (!proj.active || !enemy.active) return;
+
+    const killed = enemy.takeDamage(proj.damage);
+    proj.deactivate();
+
+    if (killed) {
+      this.kills++;
+      this.dropGem(enemy.x, enemy.y, enemy.xpValue);
+      enemy.deactivate();
+    }
+  };
+
+  private onPlayerHitEnemy = (_obj1: unknown, obj2: unknown): void => {
+    const enemy = obj2 as Enemy;
+    if (!enemy.active || this.gameOver) return;
+    this.player.takeDamage(enemy.contactDamage, this.time.now);
+    if (this.player.isDead) this.endRun();
+  };
+
+  private dropGem(x: number, y: number, xp: number): void {
+    const gem = this.gems.obtain();
+    if (!gem) return; // pool exhausted — skip the drop
+    gem.spawn(
+      x,
+      y,
+      xp,
+      this.playerPos,
+      () => this.player.stats.pickupRadius,
+      (g) => this.collectGem(g)
+    );
+  }
+
+  private collectGem(gem: Gem): void {
+    const xp = gem.xpValue;
+    gem.deactivate();
+    this.gainXp(xp);
+  }
+
+  private gainXp(amount: number): void {
+    this.xp += amount;
+    if (!this.levelingUp) this.checkLevelUp();
+  }
+
+  private checkLevelUp(): void {
+    if (this.xp < this.xpToNext) return;
+
+    this.xp -= this.xpToNext;
+    this.level++;
+    this.xpToNext = xpForLevel(this.level);
+    this.levelingUp = true;
+
+    const choices = UpgradeSystem.rollChoices(this.player);
+    this.scene.pause();
+    this.scene.launch('LevelUp', { choices });
+  }
+
+  /** Called by the LevelUp scene when the player picks an upgrade. */
+  onUpgradeChosen(kind: UpgradeKind): void {
+    UpgradeSystem.apply(this.player, kind);
+    this.levelingUp = false;
+  }
+
+  private onResume(): void {
+    // A single gem may have granted enough XP for multiple levels.
+    if (!this.levelingUp) this.checkLevelUp();
+  }
+
+  private endRun(): void {
+    if (this.gameOver) return;
+    this.gameOver = true;
+    this.player.setVelocity(0, 0);
+
+    const result: RunResult = {
+      survivedMs: this.elapsedMs,
+      kills: this.kills,
+      level: this.level,
+      score: computeScore(this.elapsedMs, this.kills, this.level)
+    };
+
+    this.scene.stop('HUD');
+    this.scene.launch('GameOver', result);
+    this.scene.pause();
+  }
+
+  update(_time: number, delta: number): void {
+    if (this.gameOver || this.levelingUp) return;
+
+    this.elapsedMs += delta;
+
+    // Movement from the joystick.
+    this.player.move(this.joystick.vector.x, this.joystick.vector.y);
+    this.playerPos.set(this.player.x, this.player.y);
+
+    this.weapons.update(delta);
+    this.spawner.update(delta, this.elapsedMs);
+
+    this.broadcastHud();
+  }
+
+  private broadcastHud(): void {
+    const state: HudState = {
+      timeMs: this.elapsedMs,
+      level: this.level,
+      xp: this.xp,
+      xpToNext: this.xpToNext,
+      hp: this.player.hp,
+      maxHp: this.player.stats.maxHp,
+      kills: this.kills
+    };
+    this.events.emit('hud', state);
+  }
+
+  private drawGrid(): void {
+    const g = this.add.graphics();
+    g.lineStyle(2, COLORS.grid, 1);
+    const step = 120;
+    for (let x = 0; x <= WORLD.width; x += step) {
+      g.lineBetween(x, 0, x, WORLD.height);
+    }
+    for (let y = 0; y <= WORLD.height; y += step) {
+      g.lineBetween(0, y, WORLD.width, y);
+    }
+    g.setDepth(-1);
+
+    // Subtle arena border.
+    const border = this.add.graphics();
+    border.lineStyle(6, COLORS.player, 0.25);
+    border.strokeRect(0, 0, WORLD.width, WORLD.height);
+    border.setDepth(-1);
+  }
+}

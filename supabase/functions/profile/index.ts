@@ -1,23 +1,27 @@
 import { withSupabase } from "@supabase/server";
 
 /**
- * GET /functions/v1/profile
- *
- * Returns the calling user's profile row from a (future) `profiles` table.
- * Auth mode "user" means Supabase validates the Bearer JWT before this code
- * runs; ctx.supabase is an RLS-scoped client so users only see their own rows.
+ * GET  /functions/v1/profile  — fetch the authenticated user's profile
+ * DELETE /functions/v1/profile — reset profile to defaults (dev helper)
  */
 export default {
-  fetch: withSupabase({ auth: "user" }, async (_req, ctx) => {
-    const { data, error } = await ctx.supabase
-      .from("profiles")
-      .select("*")
-      .single();
-
-    if (error) {
-      return Response.json({ error: error.message }, { status: 400 });
+  fetch: withSupabase({ auth: "user" }, async (req, ctx) => {
+    const userId = (await ctx.supabase.auth.getUser()).data.user?.id;
+    if (!userId) {
+      return Response.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    return Response.json(data);
+    if (req.method === "GET") {
+      const { data, error } = await ctx.supabase
+        .from("profiles")
+        .select("*")
+        .eq("id", userId)
+        .single();
+
+      if (error) return Response.json({ error: error.message }, { status: 400 });
+      return Response.json(data);
+    }
+
+    return new Response("Method Not Allowed", { status: 405 });
   }),
 };

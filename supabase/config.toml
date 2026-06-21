@@ -1,10 +1,15 @@
 # Supabase project configuration.
-# Run `supabase link --project-ref <ref>` to link to your remote project.
+# Run `supabase link --project-ref mygbxodwktbsrrevxcol` to link to the remote project.
 
 [functions.profile]
-# JWT is verified by withSupabase({ auth: "user" }) — keep this true.
+verify_jwt = true
+
+[functions.sync-profile]
+verify_jwt = true
+
+[functions.submit-run]
 verify_jwt = true
 
 [functions.leaderboard]
-# Public endpoint; withSupabase({ auth: "publishable" }) handles auth.
+# Public endpoint — withSupabase({ auth: "publishable" }) handles auth.
 verify_jwt = false

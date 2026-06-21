@@ -1,31 +1,30 @@
 import { withSupabase } from "@supabase/server";
 
 /**
- * GET /functions/v1/leaderboard
+ * GET /functions/v1/leaderboard?limit=50&character=ranger
  *
- * Public endpoint — no JWT required. Uses the publishable key so it can query
- * rows that are readable without authentication (e.g. a public leaderboard
- * view with RLS policy `FOR SELECT USING (true)`).
+ * Public endpoint — no JWT required.
+ * Returns top runs from the leaderboard view, optional filter by character.
  *
- * In supabase/config.toml set:
- *   [functions.leaderboard]
- *   verify_jwt = false
+ * supabase/config.toml: verify_jwt = false
  */
 export default {
   fetch: withSupabase({ auth: "publishable" }, async (req, ctx) => {
     const url = new URL(req.url);
-    const limit = Math.min(Number(url.searchParams.get("limit") ?? "50"), 100);
+    const limit     = Math.min(Number(url.searchParams.get("limit") ?? "50"), 100);
+    const character = url.searchParams.get("character");
 
-    const { data, error } = await ctx.supabase
+    let query = ctx.supabase
       .from("leaderboard")
-      .select("player_name, score, survived_sec, kills, level")
+      .select("id,player_name,score,survived_ms,kills,level,character_id,created_at")
       .order("score", { ascending: false })
       .limit(limit);
 
-    if (error) {
-      return Response.json({ error: error.message }, { status: 400 });
-    }
+    if (character) query = query.eq("character_id", character);
 
+    const { data, error } = await query;
+
+    if (error) return Response.json({ error: error.message }, { status: 400 });
     return Response.json(data);
   }),
 };
